@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UFOCHAT test page</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #0f1020; color: #e8e8f0; }
+  header { padding: 12px 20px; background: #1a1b33; display: flex; justify-content: space-between; align-items: center; }
+  header h1 { margin: 0; font-size: 18px; }
+  .muted { color: #9a9ab5; font-size: 13px; }
+  .card { max-width: 360px; margin: 60px auto; background: #1a1b33; padding: 24px; border-radius: 12px; }
+  input, button { font: inherit; padding: 9px 12px; border-radius: 8px; border: 1px solid #33355a; }
+  input { background: #0f1020; color: inherit; width: 100%; margin-bottom: 10px; }
+  button { background: #7c5cff; color: white; border: none; cursor: pointer; }
+  button.secondary { background: #33355a; }
+  .layout { display: grid; grid-template-columns: 240px 1fr 200px; height: calc(100vh - 52px); }
+  aside { border-right: 1px solid #262849; padding: 14px; overflow-y: auto; }
+  .room { padding: 9px 10px; border-radius: 8px; cursor: pointer; margin-bottom: 4px; }
+  .room:hover { background: #22244a; }
+  .room.active { background: #7c5cff; }
+  main { display: flex; flex-direction: column; min-height: 0; }
+  #roomTitle { padding: 14px 18px; border-bottom: 1px solid #262849; font-weight: 600; }
+  #messages { flex: 1; overflow-y: auto; padding: 16px 18px; }
+  .msg { margin-bottom: 10px; max-width: 70%; }
+  .msg .bubble { background: #22244a; padding: 8px 12px; border-radius: 10px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.mine { margin-left: auto; text-align: right; }
+  .msg.mine .bubble { background: #7c5cff; display: inline-block; text-align: left; }
+  .system { text-align: center; color: #9a9ab5; font-size: 12px; margin: 8px 0; }
+  form.send { display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid #262849; }
+  form.send input { margin: 0; }
+  .row { display: flex; gap: 6px; }
+  .row input { margin: 0; }
+  aside.online { border-right: none; border-left: 1px solid #262849; }
+  .online h3 { margin: 0 0 10px; font-size: 13px; color: #9a9ab5; text-transform: uppercase; letter-spacing: .05em; }
+  .person { display: flex; align-items: center; gap: 8px; padding: 6px 4px; font-size: 14px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #3ddc84; flex-shrink: 0; }
+  #error { color: #ff7b7b; font-size: 13px; min-height: 18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛸 UFOCHAT <span class="muted">test page</span></h1>
+  <div id="whoami" class="muted"></div>
+</header>
+
+<!-- Login screen -->
+<div id="loginView" class="card">
+  <h2 style="margin-top:0">Log in</h2>
+  <input id="email" placeholder="Email" />
+  <input id="password" type="password" placeholder="Password" />
+  <div id="error"></div>
+  <button id="loginBtn" style="width:100%">Log in</button>
+  <p class="muted">Use an account you made with the signup curl command. Open a second tab and log in as a different user to see live chat.</p>
+</div>
+
+<!-- Chat screen -->
+<div id="chatView" class="layout" style="display:none">
+  <aside>
+    <div class="row" style="margin-bottom:12px">
+      <input id="newRoom" placeholder="New room name" />
+      <button id="createBtn">+</button>
+    </div>
+    <div id="rooms"></div>
+  </aside>
+  <main>
+    <div id="roomTitle">Pick a room</div>
+    <div id="messages"></div>
+    <form class="send" id="sendForm">
+      <input id="text" placeholder="Type a message" autocomplete="off" disabled />
+      <button id="sendBtn" disabled>Send</button>
+    </form>
+  </main>
+  <aside class="online">
+    <h3>Online (<span id="onlineCount">0</span>)</h3>
+    <div id="onlineList"></div>
+  </aside>
+</div>
+
+<!-- Served automatically by the Socket.io server -->
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  // sessionStorage is per tab, so each tab can be logged in as a different user
+  let token = sessionStorage.getItem("token");
+  let me = JSON.parse(sessionStorage.getItem("me") || "null");
+  let socket = null;
+  let currentRoom = null;
+  let shownIds = new Set();   // message ids already on screen (prevents duplicates)
+  let oldestId = null;        // used by "Load older messages"
+  let online = new Map();     // userId -> { id, name, avatarUrl } (Step 5)
+
+  const $ = (id) => document.getElementById(id);
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: "Bearer " + token } : {}),
+      },
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || "Request failed");
+    return data;
+  }
+
+  // ---------- Login ----------
+  $("loginBtn").onclick = async () => {
+    $("error").textContent = "";
+    try {
+      const data = await api("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email: $("email").value, password: $("password").value }),
+      });
+      token = data.token;
+      me = data.user;
+      sessionStorage.setItem("token", token);
+      sessionStorage.setItem("me", JSON.stringify(me));
+      startChat();
+    } catch (err) {
+      $("error").textContent = err.message;
+    }
+  };
+
+  // ---------- Chat ----------
+  function startChat() {
+    $("loginView").style.display = "none";
+    $("chatView").style.display = "grid";
+    $("whoami").textContent = "Logged in as " + me.name;
+
+    // Connect to Socket.io and send the JWT for the server's login check
+    socket = io({ auth: { token } });
+
+    socket.on("connect", () => {
+      // After a reconnect the server forgot our rooms, so join again
+      // and redraw history (we may have missed messages while offline)
+      if (currentRoom) {
+        socket.emit("join_room", { roomId: currentRoom.id }, (res) => {
+          if (res.ok) renderHistory(res.messages, res.hasMore);
+        });
+      }
+    });
+    socket.on("connect_error", (err) => {
+      addSystem("Connection error: " + err.message);
+      if (err.message.includes("token")) logout();
+    });
+
+    // ----- Presence (Step 5) -----
+    // Full list: sent by the server right after we connect (and after every reconnect)
+    socket.on("online_users", (users) => {
+      online = new Map(users.map((u) => [u.id, u]));
+      renderOnline();
+    });
+    socket.on("user_online", (user) => {
+      online.set(user.id, user);
+      renderOnline();
+    });
+    socket.on("user_offline", ({ id }) => {
+      online.delete(id);
+      renderOnline();
+    });
+
+    socket.on("new_message", (msg) => {
+      if (currentRoom && msg.roomId === currentRoom.id) addMessage(msg);
+    });
+    socket.on("user_joined", ({ roomId, user }) => {
+      if (currentRoom && roomId === currentRoom.id) addSystem(user.name + " joined");
+    });
+    socket.on("user_left", ({ roomId, user }) => {
+      if (currentRoom && roomId === currentRoom.id) addSystem(user.name + " left");
+    });
+
+    loadRooms();
+  }
+
+  async function loadRooms() {
+    const { rooms } = await api("/api/rooms");
+    $("rooms").innerHTML = "";
+    if (!rooms.length) $("rooms").innerHTML = '<p class="muted">No rooms yet. Create one!</p>';
+    rooms.forEach((room) => {
+      const div = document.createElement("div");
+      div.className = "room" + (currentRoom && currentRoom.id === room.id ? " active" : "");
+      div.textContent = "# " + room.name + "  (" + room.memberCount + ")";
+      div.onclick = () => openRoom(room);
+      $("rooms").appendChild(div);
+    });
+  }
+
+  $("createBtn").onclick = async () => {
+    const name = $("newRoom").value.trim();
+    if (!name) return;
+    try {
+      const { room } = await api("/api/rooms", { method: "POST", body: JSON.stringify({ name }) });
+      $("newRoom").value = "";
+      await loadRooms();
+      openRoom(room);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  async function openRoom(room) {
+    // Leave the old socket room so we stop getting its messages
+    if (currentRoom) socket.emit("leave_room", { roomId: currentRoom.id }, () => {});
+
+    // 1. REST: become a member (saved in MongoDB)
+    if (!room.isMember) await api("/api/rooms/" + room.id + "/join", { method: "POST" });
+
+    // 2. Socket: start receiving live messages
+    //    The reply includes the latest messages (Step 4)
+    socket.emit("join_room", { roomId: room.id }, (res) => {
+      if (!res.ok) return alert(res.error);
+      currentRoom = room;
+      $("roomTitle").textContent = "# " + room.name;
+      renderHistory(res.messages, res.hasMore);
+      $("text").disabled = false;
+      $("sendBtn").disabled = false;
+      $("text").focus();
+      loadRooms();
+    });
+  }
+
+  $("sendForm").onsubmit = (e) => {
+    e.preventDefault();
+    const text = $("text").value.trim();
+    if (!text || !currentRoom) return;
+    socket.emit("send_message", { roomId: currentRoom.id, text }, (res) => {
+      if (!res.ok) return alert(res.error);
+      $("text").value = "";
+    });
+  };
+
+  // ---------- Online list (Step 5) ----------
+  function renderOnline() {
+    const users = [...online.values()].sort((a, b) => a.name.localeCompare(b.name));
+    $("onlineCount").textContent = users.length;
+    $("onlineList").innerHTML = "";
+    users.forEach((u) => {
+      const row = document.createElement("div");
+      row.className = "person";
+      const dot = document.createElement("span");
+      dot.className = "dot";
+      const name = document.createElement("span");
+      name.textContent = u.name + (u.id === me.id ? " (you)" : "");
+      row.append(dot, name);
+      $("onlineList").appendChild(row);
+    });
+  }
+
+  // ---------- History (Step 4) ----------
+  function renderHistory(messages, hasMore) {
+    $("messages").innerHTML = "";
+    shownIds = new Set();
+    oldestId = messages.length ? messages[0].id : null;
+    if (hasMore) addLoadOlderButton();
+    if (!messages.length) addSystem("No messages yet. Say hi! 👽");
+    messages.forEach(addMessage);
+  }
+
+  function addLoadOlderButton() {
+    const btn = document.createElement("button");
+    btn.id = "olderBtn";
+    btn.className = "secondary";
+    btn.style.cssText = "display:block;margin:0 auto 12px";
+    btn.textContent = "Load older messages";
+    btn.onclick = loadOlder;
+    $("messages").prepend(btn);
+  }
+
+  async function loadOlder() {
+    const btn = $("olderBtn");
+    btn.disabled = true;
+    btn.textContent = "Loading...";
+    try {
+      const { messages, hasMore } = await api(
+        "/api/rooms/" + currentRoom.id + "/messages?before=" + oldestId
+      );
+      btn.remove();
+
+      // Insert older messages at the top without making the view jump
+      const box = $("messages");
+      const heightBefore = box.scrollHeight;
+      const first = box.firstChild;
+      messages.forEach((msg) => {
+        if (shownIds.has(msg.id)) return;
+        shownIds.add(msg.id);
+        box.insertBefore(buildMessage(msg), first);
+      });
+      if (messages.length) oldestId = messages[0].id;
+      if (hasMore) addLoadOlderButton();
+      box.scrollTop += box.scrollHeight - heightBefore;
+    } catch (err) {
+      alert(err.message);
+      btn.disabled = false;
+      btn.textContent = "Load older messages";
+    }
+  }
+
+  // Adds a message at the bottom (new messages and initial history)
+  function addMessage(msg) {
+    if (shownIds.has(msg.id)) return; // already on screen
+    shownIds.add(msg.id);
+    $("messages").appendChild(buildMessage(msg));
+    $("messages").scrollTop = $("messages").scrollHeight;
+  }
+
+  // textContent (not innerHTML) so nobody can inject HTML or scripts through a message
+  function buildMessage(msg) {
+    const wrap = document.createElement("div");
+    wrap.className = "msg" + (msg.sender.id === me.id ? " mine" : "");
+    const meta = document.createElement("div");
+    meta.className = "muted";
+    meta.textContent = msg.sender.name + " · " + new Date(msg.createdAt).toLocaleTimeString();
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.textContent = msg.text;
+    wrap.append(meta, bubble);
+    return wrap;
+  }
+
+  function addSystem(text) {
+    const div = document.createElement("div");
+    div.className = "system";
+    div.textContent = text;
+    $("messages").appendChild(div);
+    $("messages").scrollTop = $("messages").scrollHeight;
+  }
+
+  function logout() {
+    sessionStorage.clear();
+    location.reload();
+  }
+
+  if (token && me) startChat();
+</script>
+</body>
+</html>
