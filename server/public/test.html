@@ -36,6 +36,11 @@
   .online h3 { margin: 0 0 10px; font-size: 13px; color: #9a9ab5; text-transform: uppercase; letter-spacing: .05em; }
   .person { display: flex; align-items: center; gap: 8px; padding: 6px 4px; font-size: 14px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #3ddc84; flex-shrink: 0; }
+  .typing { height: 22px; padding: 0 18px; font-size: 13px; color: #9a9ab5; font-style: italic; }
+  .typing .dots span { animation: blink 1.2s infinite; }
+  .typing .dots span:nth-child(2) { animation-delay: .2s; }
+  .typing .dots span:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
   #error { color: #ff7b7b; font-size: 13px; min-height: 18px; }
 </style>
 </head>
@@ -67,6 +72,7 @@
   <main>
     <div id="roomTitle">Pick a room</div>
     <div id="messages"></div>
+    <div id="typing" class="typing"></div>
     <form class="send" id="sendForm">
       <input id="text" placeholder="Type a message" autocomplete="off" disabled />
       <button id="sendBtn" disabled>Send</button>
@@ -89,6 +95,15 @@
   let shownIds = new Set();   // message ids already on screen (prevents duplicates)
   let oldestId = null;        // used by "Load older messages"
   let online = new Map();     // userId -> { id, name, avatarUrl } (Step 5)
+
+  // Typing (Step 6)
+  let typingUsers = new Map(); // userId -> { name, timer } for people typing in the current room
+  let amTyping = false;        // are WE currently marked as typing?
+  let lastTypingSent = 0;      // when we last sent typing_start
+  let stopTypingTimer = null;  // sends typing_stop after we pause
+  const TYPING_IDLE_MS = 2500;   // pause this long and we count as "stopped"
+  const TYPING_RESEND_MS = 3000; // while typing, remind the server this often
+  const TYPING_EXPIRE_MS = 6000; // forget someone if no update for this long (lost connection etc.)
 
   const $ = (id) => document.getElementById(id);
 
@@ -158,11 +173,31 @@
     });
     socket.on("user_offline", ({ id }) => {
       online.delete(id);
+      removeTyping(id);
       renderOnline();
     });
 
     socket.on("new_message", (msg) => {
-      if (currentRoom && msg.roomId === currentRoom.id) addMessage(msg);
+      if (currentRoom && msg.roomId === currentRoom.id) {
+        addMessage(msg);
+        removeTyping(msg.sender.id); // they sent it, so they're done typing
+      }
+    });
+
+    // ----- Typing (Step 6) -----
+    socket.on("typing", ({ roomId, user, isTyping }) => {
+      if (!currentRoom || roomId !== currentRoom.id) return;
+      if (user.id === me.id) return; // ourselves in another tab
+      if (isTyping) {
+        const existing = typingUsers.get(user.id);
+        if (existing) clearTimeout(existing.timer);
+        // Safety net: drop them if we hear nothing for a while
+        const timer = setTimeout(() => removeTyping(user.id), TYPING_EXPIRE_MS);
+        typingUsers.set(user.id, { name: user.name, timer });
+        renderTyping();
+      } else {
+        removeTyping(user.id);
+      }
     });
     socket.on("user_joined", ({ roomId, user }) => {
       if (currentRoom && roomId === currentRoom.id) addSystem(user.name + " joined");
@@ -202,7 +237,11 @@
 
   async function openRoom(room) {
     // Leave the old socket room so we stop getting its messages
-    if (currentRoom) socket.emit("leave_room", { roomId: currentRoom.id }, () => {});
+    if (currentRoom) {
+      stopMyTyping();
+      socket.emit("leave_room", { roomId: currentRoom.id }, () => {});
+    }
+    clearAllTyping();
 
     // 1. REST: become a member (saved in MongoDB)
     if (!room.isMember) await api("/api/rooms/" + room.id + "/join", { method: "POST" });
@@ -225,11 +264,67 @@
     e.preventDefault();
     const text = $("text").value.trim();
     if (!text || !currentRoom) return;
+    stopMyTyping(true); // server clears it when the message arrives, so no need to send typing_stop
     socket.emit("send_message", { roomId: currentRoom.id, text }, (res) => {
       if (!res.ok) return alert(res.error);
       $("text").value = "";
     });
   };
+
+  // ---------- Typing (Step 6) ----------
+  // Runs on every keystroke in the message box
+  $("text").addEventListener("input", () => {
+    if (!currentRoom) return;
+    if (!$("text").value.trim()) return stopMyTyping(); // box cleared
+
+    const now = Date.now();
+    // Send typing_start when we begin, then again every few seconds as a "still typing" reminder
+    if (!amTyping || now - lastTypingSent > TYPING_RESEND_MS) {
+      socket.emit("typing_start", { roomId: currentRoom.id });
+      amTyping = true;
+      lastTypingSent = now;
+    }
+    // Restart the pause timer on every key press
+    clearTimeout(stopTypingTimer);
+    stopTypingTimer = setTimeout(() => stopMyTyping(), TYPING_IDLE_MS);
+  });
+
+  function stopMyTyping(silent) {
+    clearTimeout(stopTypingTimer);
+    if (amTyping && currentRoom && !silent) socket.emit("typing_stop", { roomId: currentRoom.id });
+    amTyping = false;
+  }
+
+  function removeTyping(userId) {
+    const entry = typingUsers.get(userId);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    typingUsers.delete(userId);
+    renderTyping();
+  }
+
+  function clearAllTyping() {
+    typingUsers.forEach((e) => clearTimeout(e.timer));
+    typingUsers.clear();
+    renderTyping();
+  }
+
+  function renderTyping() {
+    const names = [...typingUsers.values()].map((e) => e.name);
+    let text = "";
+    if (names.length === 1) text = names[0] + " is typing";
+    else if (names.length === 2) text = names[0] + " and " + names[1] + " are typing";
+    else if (names.length > 2) text = "Several people are typing";
+
+    const box = $("typing");
+    box.innerHTML = "";
+    if (!text) return;
+    box.append(document.createTextNode(text));
+    const dots = document.createElement("span");
+    dots.className = "dots";
+    dots.innerHTML = "<span>.</span><span>.</span><span>.</span>";
+    box.append(dots);
+  }
 
   // ---------- Online list (Step 5) ----------
   function renderOnline() {

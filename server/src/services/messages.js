@@ -21,7 +21,7 @@ async function getMessages(roomId, { before, limit } = {}) {
   const docs = await Message.find(filter)
     .sort({ _id: -1 })
     .limit(size + 1)
-    .populate("sender", "name avatarUrl");
+    .populate("sender", "name username avatarUrl");
 
   const hasMore = docs.length > size;
   const page = docs.slice(0, size).reverse(); // back to oldest first
@@ -29,4 +29,13 @@ async function getMessages(roomId, { before, limit } = {}) {
   return { messages: page.map((m) => m.toPublic()), hasMore };
 }
 
-module.exports = { getMessages };
+/**
+ * Save a system notice ("Alien joined the room") in the history and show it live.
+ */
+async function postSystemMessage(io, roomId, text) {
+  const message = await Message.create({ room: roomId, type: "system", text });
+  if (io) io.to(String(roomId)).emit("new_message", message.toPublic());
+  return message;
+}
+
+module.exports = { getMessages, postSystemMessage };

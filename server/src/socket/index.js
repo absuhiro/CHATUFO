@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const registerChatHandlers = require("./chatHandlers");
 const presence = require("./presence");
+const { registerTypingHandlers } = require("./typingHandlers");
 
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
@@ -21,7 +22,8 @@ function initSocket(httpServer) {
       if (!user) return next(new Error("User not found"));
 
       // Saved on the socket so every event handler knows who is talking
-      socket.data.user = { ...user.toPublic(), id: String(user._id) };
+      // Public card only (no email), because this object gets broadcast in online and typing events
+      socket.data.user = user.toCard();
       next();
     } catch {
       next(new Error("Invalid or expired token"));
@@ -31,6 +33,9 @@ function initSocket(httpServer) {
   io.on("connection", (socket) => {
     const user = socket.data.user;
     console.log(`🛸 ${user.name} connected (${socket.id})`);
+
+    // Personal channel: lets the server reach this user on all their tabs (friend requests, invites...)
+    socket.join(`user:${user.id}`);
 
     // ----- Presence (Step 5) -----
     const cameOnline = presence.addConnection(user, socket.id);
@@ -45,6 +50,7 @@ function initSocket(httpServer) {
     });
 
     registerChatHandlers(io, socket);
+    registerTypingHandlers(io, socket); // Step 6
 
     socket.on("disconnect", (reason) => {
       console.log(`👋 ${user.name} disconnected (${reason})`);

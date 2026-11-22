@@ -1,28 +1,42 @@
 const mongoose = require("mongoose");
 
+// Two kinds of room:
+//   "group"  an invite-only room with a name (members invite their friends)
+//   "dm"     a private chat between exactly two friends
 const roomSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true, trim: true, minlength: 2, maxlength: 40 },
-    // Lowercase copy of the name so "General" and "general" count as the same room
-    nameLower: { type: String, required: true, unique: true },
+    type: { type: String, enum: ["group", "dm"], default: "group" },
+    name: { type: String, trim: true, maxlength: 40 },
     description: { type: String, trim: true, maxlength: 200, default: "" },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    // DMs only: "smallerId:biggerId" so the same two people always get the same DM
+    dmKey: { type: String, unique: true, sparse: true },
+    // Updated on every message, used to sort DMs and rooms by recent activity
+    lastMessageAt: { type: Date },
   },
   { timestamps: true }
 );
 
-// Shape sent to the client. Pass the logged in user's id to get an "isMember" flag.
-roomSchema.methods.toPublic = function (userId) {
+roomSchema.index({ members: 1, type: 1 });
+
+roomSchema.methods.isMember = function (userId) {
+  return this.members.some((m) => String(m._id || m) === String(userId));
+};
+
+roomSchema.methods.toPublic = function () {
   return {
-    id: this._id,
+    id: String(this._id),
+    type: this.type,
     name: this.name,
     description: this.description,
-    createdBy: this.createdBy,
+    createdBy: String(this.createdBy),
     memberCount: this.members.length,
-    isMember: userId ? this.members.some((m) => String(m._id || m) === String(userId)) : undefined,
+    lastMessageAt: this.lastMessageAt,
     createdAt: this.createdAt,
   };
 };
+
+roomSchema.statics.dmKeyFor = (a, b) => [String(a), String(b)].sort().join(":");
 
 module.exports = mongoose.model("Room", roomSchema);

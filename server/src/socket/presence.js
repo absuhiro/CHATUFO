@@ -14,7 +14,10 @@ const onlineUsers = new Map();
 function addConnection(user, socketId) {
   let entry = onlineUsers.get(user.id);
   if (!entry) {
-    entry = { user: { id: user.id, name: user.name, avatarUrl: user.avatarUrl }, sockets: new Set() };
+    entry = {
+      user: { id: user.id, name: user.name, username: user.username, avatarUrl: user.avatarUrl },
+      sockets: new Set(),
+    };
     onlineUsers.set(user.id, entry);
   }
   entry.sockets.add(socketId);
@@ -40,8 +43,14 @@ function getOnlineUsers() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Someone changed their name or photo: update the online list copy (Step 8)
+function updateUser(card) {
+  const entry = onlineUsers.get(card.id);
+  if (entry) entry.user = { id: card.id, name: card.name, username: card.username, avatarUrl: card.avatarUrl };
+}
+
 function isOnline(userId) {
   return onlineUsers.has(String(userId));
 }
 
-module.exports = { addConnection, removeConnection, getOnlineUsers, isOnline };
+module.exports = { addConnection, removeConnection, getOnlineUsers, isOnline, updateUser };
