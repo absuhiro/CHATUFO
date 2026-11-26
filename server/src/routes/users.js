@@ -4,6 +4,7 @@ const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const { requireAuth } = require("../middleware/auth");
 const presence = require("../socket/presence");
+const { check, isSealedBackup } = require("../services/e2ee");
 
 const router = express.Router();
 
@@ -143,23 +144,53 @@ router.delete("/me/avatar", async (req, res) => {
   }
 });
 
-// PATCH /api/users/me/password   { currentPassword, newPassword }
+// GET /api/users/me/keys   your salt + locked key backup (used to change your password)
+router.get("/me/keys", async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select("+encryptedPrivateKeys");
+    if (!user || user.authVersion !== 2) return res.status(404).json({ message: "Encryption isn't set up" });
+    res.json({ kdfSalt: user.kdfSalt, encryptedPrivateKeys: user.encryptedPrivateKeys });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+// PATCH /api/users/me/password
+// { currentAuthHash, newAuthHash, newKdfSalt, encryptedPrivateKeys }
+// The browser re-locks the SAME private keys with the new password, so old messages stay readable.
 router.patch("/me/password", async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body || {};
-    if (!isStr(currentPassword) || !isStr(newPassword)) {
-      return res.status(400).json({ message: "Enter your current and new password" });
-    }
-    if (newPassword.length < 6) {
-      return res.status(400).json({ message: "New password must be at least 6 characters" });
-    }
+    const body = req.body || {};
     const user = await User.findById(req.userId);
-    if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+    if (!user || user.authVersion !== 2) return res.status(404).json({ message: "Encryption isn't set up" });
+    if (!check("authHash", body.currentAuthHash) || !(await bcrypt.compare(body.currentAuthHash, user.passwordHash))) {
       return res.status(400).json({ message: "Current password is wrong" });
     }
-    user.passwordHash = await bcrypt.hash(newPassword, 10);
+    if (!check("authHash", body.newAuthHash) || !check("kdfSalt", body.newKdfSalt) || !isSealedBackup(body.encryptedPrivateKeys)) {
+      return res.status(400).json({ message: "Invalid data. Please refresh and try again." });
+    }
+    user.passwordHash = await bcrypt.hash(body.newAuthHash, 10);
+    user.kdfSalt = body.newKdfSalt;
+    user.encryptedPrivateKeys = body.encryptedPrivateKeys;
     await user.save();
     res.json({ ok: true });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+// POST /api/users/public-keys  { ids: [userId, ...] }  ->  { keys: { userId: { publicKey, signingPublicKey } } }
+// Anyone's public keys (they're public). Used to check message signatures.
+router.post("/public-keys", async (req, res) => {
+  try {
+    const ids = (req.body && req.body.ids) || [];
+    if (!Array.isArray(ids) || ids.length > 200 || !ids.every((id) => mongoose.isValidObjectId(id))) {
+      return res.status(400).json({ message: "Send up to 200 user ids" });
+    }
+    const users = await User.find({ _id: { $in: ids } }).select("publicKey signingPublicKey");
+    const keys = {};
+    for (const u of users) keys[String(u._id)] = u.toKeys();
+    res.json({ keys });
   } catch (err) {
     fail(res, err);
   }

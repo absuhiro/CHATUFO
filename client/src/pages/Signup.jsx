@@ -41,6 +41,10 @@ export default function Signup() {
         <div className="auth-logo">🛸</div>
         <h1>Join UFOCHAT</h1>
         <p className="muted">Create your account</p>
+        <div className="notice">
+          🔒 Your messages are end-to-end encrypted. Your password unlocks them, so don't forget it: there's no way to
+          reset it without losing your message history.
+        </div>
 
         <label>
           Display name
@@ -64,7 +68,7 @@ export default function Signup() {
         {error && <div className="form-error">{error}</div>}
 
         <button className="btn-primary" disabled={busy}>
-          {busy ? "Creating account..." : "Sign up"}
+          {busy ? "Creating your encryption keys..." : "Sign up"}
         </button>
         <p className="muted center">
           Already have an account? <Link to="/login">Log in</Link>

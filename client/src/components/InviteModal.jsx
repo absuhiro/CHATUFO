@@ -54,7 +54,7 @@ export default function InviteModal({ room, onClose }) {
         <div className="modal-empty">
           <div className="empty-icon">🛸</div>
           <p>You need friends before you can invite anyone.</p>
-          <Link className="btn-primary" to="/?tab=add" onClick={onClose}>
+          <Link className="btn-primary" to="/friends?add=1" onClick={onClose}>
             Add a friend
           </Link>
         </div>

@@ -1,11 +1,12 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Modal from "./Modal";
 import Avatar from "./Avatar";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../utils/api";
 import { fileToSquareDataUrl } from "../utils/image";
+import { securityCode } from "../crypto/e2ee";
 
-// "User Settings": edit your profile (photo, name, username, about me) and change your password
+// "User Settings": your profile (photo, name, username, about me), password, and encryption info
 export default function SettingsModal({ onClose }) {
   const [tab, setTab] = useState("profile");
   return (
@@ -17,8 +18,11 @@ export default function SettingsModal({ onClose }) {
         <button className={`tab ${tab === "password" ? "active" : ""}`} onClick={() => setTab("password")}>
           Password
         </button>
+        <button className={`tab ${tab === "encryption" ? "active" : ""}`} onClick={() => setTab("encryption")}>
+          Encryption
+        </button>
       </nav>
-      {tab === "profile" ? <ProfileForm /> : <PasswordForm />}
+      {tab === "profile" ? <ProfileForm /> : tab === "password" ? <PasswordForm /> : <EncryptionInfo />}
     </Modal>
   );
 }
@@ -136,7 +140,37 @@ function ProfileForm() {
   );
 }
 
+function EncryptionInfo() {
+  const { user } = useAuth();
+  const [code, setCode] = useState("");
+  useEffect(() => {
+    if (user.publicKey && user.signingPublicKey) securityCode(user).then(setCode);
+  }, [user]);
+
+  return (
+    <div className="modal-form encryption-info">
+      <p>
+        🔒 Your DMs and rooms are <strong>end-to-end encrypted</strong>. Messages are locked in your browser and can
+        only be unlocked by the people in the chat. The UFOCHAT server only stores scrambled data.
+      </p>
+      <div>
+        <div className="section-label">Your security code</div>
+        <p className="security-code big">{code || "..."}</p>
+        <p className="muted small">
+          Friends see this code on your profile card in your DM. If it matches what they see, nobody has swapped your
+          keys.
+        </p>
+      </div>
+      <p className="muted small">
+        Your password unlocks your messages, and it never leaves your browser. If you forget it, there's no way to get
+        your old messages back.
+      </p>
+    </div>
+  );
+}
+
 function PasswordForm() {
+  const { changePassword } = useAuth();
   const [form, setForm] = useState({ currentPassword: "", newPassword: "", confirm: "" });
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -152,10 +186,8 @@ function PasswordForm() {
     if (form.newPassword !== form.confirm) return setStatus({ ok: false, text: "New passwords don't match" });
     setBusy(true);
     try {
-      await api("/users/me/password", {
-        method: "PATCH",
-        body: { currentPassword: form.currentPassword, newPassword: form.newPassword },
-      });
+      // Your keys are re-locked with the new password in this browser, so old messages stay readable
+      await changePassword(form.currentPassword, form.newPassword);
       setForm({ currentPassword: "", newPassword: "", confirm: "" });
       setStatus({ ok: true, text: "Password changed!" });
     } catch (err) {

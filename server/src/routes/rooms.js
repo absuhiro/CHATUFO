@@ -75,13 +75,14 @@ router.post("/", async (req, res) => {
 // GET /api/rooms/:id   one room (group or DM) with its members and their online status
 router.get("/:id", async (req, res) => {
   try {
-    await req.room.populate("members", "name username avatarUrl bio");
+    await req.room.populate("members", "name username avatarUrl bio publicKey signingPublicKey");
     res.json({
       room: {
         ...req.room.toPublic(),
+        // Each member's public keys come along, so the app can lock messages for everyone
         members: req.room.members
           .filter(Boolean)
-          .map((m) => ({ ...m.toCard(), online: presence.isOnline(m._id) })),
+          .map((m) => ({ ...m.toCard(), ...m.toKeys(), online: presence.isOnline(m._id) })),
       },
     });
   } catch (err) {
@@ -96,7 +97,7 @@ router.get("/:id/messages", async (req, res) => {
     if (before !== undefined && (!isStr(before) || !mongoose.isValidObjectId(before))) {
       return res.status(400).json({ message: "Invalid 'before' id" });
     }
-    res.json(await getMessages(req.room._id, { before, limit }));
+    res.json(await getMessages(req.room._id, { before, limit, forUserId: req.userId }));
   } catch (err) {
     fail(res, err);
   }

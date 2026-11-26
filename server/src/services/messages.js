@@ -6,12 +6,13 @@ const MAX_LIMIT = 100;
 
 /**
  * Get a page of messages for a room, oldest first (the order a chat screen shows them).
- *   roomId  the room
- *   before  optional message id: only return messages older than this one
- *   limit   how many (default 50, max 100)
+ *   roomId     the room
+ *   before     optional message id: only return messages older than this one
+ *   limit      how many (default 50, max 100)
+ *   forUserId  who's asking: each encrypted message only includes THEIR locked key
  * Returns { messages, hasMore } where hasMore says if even older messages exist.
  */
-async function getMessages(roomId, { before, limit } = {}) {
+async function getMessages(roomId, { before, limit, forUserId } = {}) {
   const size = Math.min(Math.max(parseInt(limit, 10) || DEFAULT_LIMIT, 1), MAX_LIMIT);
 
   const filter = { room: roomId };
@@ -26,7 +27,7 @@ async function getMessages(roomId, { before, limit } = {}) {
   const hasMore = docs.length > size;
   const page = docs.slice(0, size).reverse(); // back to oldest first
 
-  return { messages: page.map((m) => m.toPublic()), hasMore };
+  return { messages: page.map((m) => m.toPublic(null, forUserId)), hasMore };
 }
 
 /**

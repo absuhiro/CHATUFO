@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, notice } = useAuth();
   const [loginValue, setLoginValue] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -28,6 +28,7 @@ export default function Login() {
         <div className="auth-logo">🛸</div>
         <h1>Welcome back</h1>
         <p className="muted">Log in to UFOCHAT</p>
+        {notice && <div className="notice">🔒 {notice}</div>}
 
         <label>
           Email or username
@@ -48,7 +49,7 @@ export default function Login() {
         {error && <div className="form-error">{error}</div>}
 
         <button className="btn-primary" disabled={busy}>
-          {busy ? "Logging in..." : "Log in"}
+          {busy ? "Unlocking your messages..." : "Log in"}
         </button>
         <p className="muted center">
           New here? <Link to="/signup">Create an account</Link>

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useSocket } from "../context/SocketContext";
+import Icon from "./Icon";
 
 const TYPING_IDLE_MS = 2500; // pause this long = "stopped typing"
 const TYPING_RESEND_MS = 3000; // while typing, remind the server this often
 const MAX_LENGTH = 2000;
 
-export default function MessageInput({ roomId, disabled, placeholder }) {
+// onSend(text) does the encrypting and sending (see ChatPage). It throws an Error if sending fails.
+export default function MessageInput({ roomId, disabled, placeholder, onSend }) {
   const { socket, connected } = useSocket();
   const [text, setText] = useState("");
   const [error, setError] = useState("");
@@ -48,20 +50,20 @@ export default function MessageInput({ roomId, disabled, placeholder }) {
     t.timer = setTimeout(() => stopTyping(), TYPING_IDLE_MS);
   };
 
-  const send = () => {
+  const send = async () => {
     const clean = text.trim();
     if (!clean || sending || !socket) return;
     stopTyping(false); // the server clears typing when the message arrives
     setSending(true);
-    socket.emit("send_message", { roomId, text: clean }, (res) => {
+    try {
+      await onSend(clean);
+      setText("");
+    } catch (err) {
+      setError(err.message);
+    } finally {
       setSending(false);
-      if (res.ok) {
-        setText("");
-        inputRef.current?.focus();
-      } else {
-        setError(res.error);
-      }
-    });
+      inputRef.current?.focus();
+    }
   };
 
   // Enter sends, Shift+Enter adds a new line
@@ -85,11 +87,18 @@ export default function MessageInput({ roomId, disabled, placeholder }) {
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           placeholder={connected ? placeholder || "Type a message" : "Reconnecting..."}
+          aria-label="Message"
           maxLength={MAX_LENGTH}
           disabled={off}
         />
-        <button className="btn-primary send-btn" onClick={send} disabled={off || sending || !text.trim()}>
-          Send
+        <button
+          className="send-btn"
+          onClick={send}
+          disabled={off || sending || !text.trim()}
+          title="Send (Enter)"
+          aria-label="Send message"
+        >
+          <Icon name={sending ? "lock" : "send"} size={18} />
         </button>
       </div>
       {text.length > MAX_LENGTH - 200 && (

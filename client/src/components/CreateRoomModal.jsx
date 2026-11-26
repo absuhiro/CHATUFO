@@ -6,7 +6,7 @@ import { useData } from "../context/DataContext";
 
 export default function CreateRoomModal({ onClose }) {
   const navigate = useNavigate();
-  const { loadRooms } = useData();
+  const { loadConversations } = useData();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
@@ -18,9 +18,9 @@ export default function CreateRoomModal({ onClose }) {
     setBusy(true);
     try {
       const { room } = await api("/rooms", { method: "POST", body: { name: name.trim(), description } });
-      await loadRooms();
+      await loadConversations();
       onClose();
-      navigate(`/rooms/${room.id}`);
+      navigate(`/chat/${room.id}`, { state: { from: "/" } });
     } catch (err) {
       setError(err.message);
       setBusy(false);

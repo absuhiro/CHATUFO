@@ -33,3 +33,21 @@ export default function Avatar({ user, size = 36, online }) {
     </span>
   );
 }
+
+// "Web Development Club" -> "WD"
+function roomInitials(name = "") {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  return words.slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "#";
+}
+
+// Rooms get a rounded square (people are circles), so you can tell them apart at a glance
+export function RoomAvatar({ name, size = 44 }) {
+  return (
+    <span
+      className="room-avatar"
+      style={{ width: size, height: size, fontSize: size * 0.36, background: colorFor(name) }}
+    >
+      {roomInitials(name)}
+    </span>
+  );
+}

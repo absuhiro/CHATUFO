@@ -1,5 +1,6 @@
 const User = require("../models/User");
 const Room = require("../models/Room");
+const Message = require("../models/Message");
 
 // Runs once at startup. Upgrades data created by earlier steps so old accounts keep working.
 async function migrate() {
@@ -10,7 +11,12 @@ async function migrate() {
   //    "room names must be unique" index (rooms are private now, so names can repeat).
   await Room.syncIndexes();
 
-  // 3. Accounts from before usernames existed get one based on their email (abhi@test.com -> abhi)
+  // 3. End-to-end encryption: delete every old unencrypted message (system notices stay).
+  //    Safe to run every startup: the server no longer accepts unencrypted messages.
+  const { deletedCount } = await Message.deleteMany({ type: { $nin: ["system", "encrypted"] } });
+  if (deletedCount) console.log(`Deleted ${deletedCount} old unencrypted messages`);
+
+  // 4. Accounts from before usernames existed get one based on their email (abhi@test.com -> abhi)
   const users = await User.find({ $or: [{ username: { $exists: false } }, { username: null }] });
   for (const user of users) {
     let base = user.email.split("@")[0].toLowerCase().replace(/[^a-z0-9_.]/g, "").slice(0, 16);

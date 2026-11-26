@@ -20,6 +20,37 @@ function formatDay(iso) {
 
 const isSystem = (m) => m.type === "system";
 
+// The text inside a bubble, or a note when it can't be shown (end-to-end encryption)
+function MessageBody({ msg }) {
+  const when = new Date(msg.createdAt).toLocaleString();
+  if (msg.e2ee === "no-key") {
+    return (
+      <div className="bubble locked" title={when}>
+        🔒 Sent before you joined, so you don't have the key for it
+      </div>
+    );
+  }
+  if (msg.e2ee === "failed") {
+    return (
+      <div className="bubble locked" title={when}>
+        ⚠ This message couldn't be decrypted. It may have been tampered with.
+      </div>
+    );
+  }
+  return (
+    <>
+      <div className="bubble" title={when}>
+        {linkify(msg.text)}
+      </div>
+      {msg.verified === false && (
+        <div className="unverified" title="The signature doesn't match this sender's key">
+          ⚠ Couldn't verify who sent this
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function MessageList({ messages, myId, hasMore, onLoadOlder, emptyText }) {
   const boxRef = useRef(null);
   const prev = useRef({ firstId: null, lastId: null, height: 0, nearBottom: true });
@@ -120,9 +151,7 @@ export default function MessageList({ messages, myId, hasMore, onLoadOlder, empt
                     <span className="msg-time">{formatTime(msg.createdAt)}</span>
                   </div>
                 )}
-                <div className="bubble" title={new Date(msg.createdAt).toLocaleString()}>
-                  {linkify(msg.text)}
-                </div>
+                <MessageBody msg={msg} />
               </div>
             </div>
           </div>

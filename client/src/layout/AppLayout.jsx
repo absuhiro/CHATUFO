@@ -1,37 +1,18 @@
-import { useEffect, useState } from "react";
-import { Outlet, useLocation, useMatch } from "react-router-dom";
-import ServerRail from "../components/ServerRail";
-import HomeSidebar from "../components/HomeSidebar";
-import RoomSidebar from "../components/RoomSidebar";
-import UserBar from "../components/UserBar";
+import { Outlet, useLocation } from "react-router-dom";
+import NavRail from "../components/NavRail";
 
-// The Discord-style frame around every logged in page:
-//   [ rail | sidebar | page ]
-// The page itself (Friends or a chat) comes from the router through <Outlet />.
+// The frame around every logged in page:   [ rail | page ]
+// No sidebars: the page is the dashboard, a list, or a full chat view (from the router via <Outlet />).
 export default function AppLayout() {
-  const roomMatch = useMatch("/rooms/:roomId");
   const { pathname } = useLocation();
-  const [navOpen, setNavOpen] = useState(false); // phones: rail + sidebar slide in
-
-  // Close the phone menu whenever the page changes
-  useEffect(() => setNavOpen(false), [pathname]);
+  const chatOpen = pathname.startsWith("/chat/");
 
   return (
-    <div className={`app ${navOpen ? "nav-open" : ""}`}>
-      <div className="nav">
-        <ServerRail />
-        <aside className="sidebar">
-          {roomMatch ? <RoomSidebar roomId={roomMatch.params.roomId} /> : <HomeSidebar />}
-          <UserBar />
-        </aside>
-      </div>
-
-      <main className="page">
-        {/* Pages get openNav so their header can show a ☰ button on phones */}
-        <Outlet context={{ openNav: () => setNavOpen(true) }} />
+    <div className={`app ${chatOpen ? "chat-open" : ""}`}>
+      <NavRail />
+      <main className="main">
+        <Outlet />
       </main>
-
-      {navOpen && <div className="overlay" onClick={() => setNavOpen(false)} />}
     </div>
   );
 }

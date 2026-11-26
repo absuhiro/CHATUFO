@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSocket } from "../context/SocketContext";
+import { useAuth } from "../context/AuthContext";
 import { api } from "../utils/api";
+import { decryptMessage } from "../crypto/e2ee";
+import { getPublicKeys } from "../crypto/publicKeys";
 
 const TYPING_EXPIRE_MS = 6000; // forget someone typing if we hear nothing for this long
 
@@ -13,9 +16,18 @@ const TYPING_EXPIRE_MS = 6000; // forget someone typing if we hear nothing for t
  * Opening = socket join_room (start listening + get the latest messages).
  * You must already be a member (invite accepted, or one of the two people in a DM).
  * Re-runs after a reconnect so missed messages show up.
+ *
+ * Encrypted messages are decrypted here, before they reach the screen. Each one gets:
+ *   text      the decrypted text
+ *   e2ee      "ok" | "no-key" (sent before you joined) | "failed" (damaged or tampered with)
+ *   verified  true if the sender's signature checks out, false if it doesn't, null if unknown
  */
+
+// Sort by id: ids grow over time, so this is the order messages were sent
+const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 export function useRoomChat(roomId) {
   const { socket, connected } = useSocket();
+  const { user, keys } = useAuth();
   const [messages, setMessages] = useState([]);
   const [hasMore, setHasMore] = useState(false);
   const [status, setStatus] = useState("loading");
@@ -35,27 +47,65 @@ export function useRoomChat(roomId) {
     });
   }, []);
 
+  // Decrypt a batch of messages (system notices pass straight through)
+  const decryptAll = useCallback(
+    async (list) => {
+      const senderIds = list.filter((m) => m.type === "encrypted" && m.sender?.id).map((m) => m.sender.id);
+      const senderKeys = senderIds.length ? await getPublicKeys(senderIds).catch(() => new Map()) : new Map();
+      return Promise.all(
+        list.map(async (msg) => {
+          if (msg.type !== "encrypted") return msg;
+          const result = await decryptMessage({
+            msg,
+            myId: user.id,
+            decryptKey: keys.decryptKey,
+            verifyKey: senderKeys.get(msg.sender?.id)?.verifyKey,
+          });
+          // Drop the scrambled fields once decrypted: nothing else needs them
+          const { ciphertext, iv, signature, keys: _locked, ...rest } = msg;
+          return { ...rest, text: result.text || "", e2ee: result.status, verified: result.verified ?? null };
+        })
+      );
+    },
+    [user.id, keys]
+  );
+
   useEffect(() => {
     if (!socket || !connected || !roomId) return;
     let cancelled = false;
 
     setStatus((s) => (s === "ready" ? s : "loading"));
-    socket.emit("join_room", { roomId }, (res) => {
+    socket.emit("join_room", { roomId }, async (res) => {
       if (cancelled) return;
       if (!res.ok) {
         setStatus("error");
         setError(res.error);
         return;
       }
-      setMessages(res.messages);
+      const decrypted = await decryptAll(res.messages);
+      if (cancelled) return;
+      // Keep any live message that arrived while we were decrypting
+      setMessages((prev) => {
+        const ids = new Set(decrypted.map((m) => m.id));
+        return [...decrypted, ...prev.filter((m) => !ids.has(m.id) && m.id > (decrypted.at(-1)?.id || ""))].sort(byId);
+      });
       setHasMore(res.hasMore);
       setStatus("ready");
     });
 
-    const onNewMessage = (msg) => {
+    const onNewMessage = async (msg) => {
       if (msg.roomId !== roomId) return;
-      setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
       if (msg.sender) removeTyping(msg.sender.id); // they sent it, so they've stopped typing
+      // You're looking at this chat, so someone else's new message counts as read straight away
+      if (msg.sender && msg.sender.id !== user.id) socket.emit("mark_read", { roomId });
+      const [ready] = await decryptAll([msg]);
+      if (cancelled) return;
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === ready.id)) return prev;
+        const next = [...prev, ready];
+        // Decrypting takes a moment, so two quick messages could finish out of order: re-sort if needed
+        return prev.length && prev[prev.length - 1].id > ready.id ? next.sort(byId) : next;
+      });
     };
     const onTyping = ({ roomId: rid, user, isTyping }) => {
       if (rid !== roomId) return;
@@ -91,7 +141,7 @@ export function useRoomChat(roomId) {
       typingTimers.current = {};
       setTyping({});
     };
-  }, [socket, connected, roomId, removeTyping]);
+  }, [socket, connected, roomId, removeTyping, decryptAll, user.id]);
 
   // "Load older messages": ask for messages before the oldest one we have
   const loadOlder = useCallback(async () => {
@@ -99,15 +149,16 @@ export function useRoomChat(roomId) {
     loadingOlder.current = true;
     try {
       const res = await api(`/rooms/${roomId}/messages?before=${messages[0].id}`);
+      const older = await decryptAll(res.messages);
       setMessages((prev) => {
         const have = new Set(prev.map((m) => m.id));
-        return [...res.messages.filter((m) => !have.has(m.id)), ...prev];
+        return [...older.filter((m) => !have.has(m.id)), ...prev];
       });
       setHasMore(res.hasMore);
     } finally {
       loadingOlder.current = false;
     }
-  }, [messages, roomId]);
+  }, [messages, roomId, decryptAll]);
 
   const typingUsers = Object.entries(typing).map(([id, name]) => ({ id, name }));
 

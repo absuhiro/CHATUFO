@@ -9,6 +9,7 @@ const friendRoutes = require("./routes/friends");
 const dmRoutes = require("./routes/dms");
 const inviteRoutes = require("./routes/invites");
 const userRoutes = require("./routes/users");
+const conversationRoutes = require("./routes/conversations");
 const migrate = require("./config/migrate");
 const initSocket = require("./socket");
 
@@ -33,6 +34,7 @@ app.use("/api/friends", friendRoutes);
 app.use("/api/dms", dmRoutes);
 app.use("/api/invites", inviteRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/conversations", conversationRoutes);
 
 // Catch-all error handler so a crash in a route returns JSON instead of an HTML page
 app.use((err, req, res, next) => {

@@ -14,6 +14,8 @@ const roomSchema = new mongoose.Schema(
     dmKey: { type: String, unique: true, sparse: true },
     // Updated on every message, used to sort DMs and rooms by recent activity
     lastMessageAt: { type: Date },
+    // When each member last read this chat: userId -> date. Used for unread counts.
+    readAt: { type: Map, of: Date, default: {} },
   },
   { timestamps: true }
 );
